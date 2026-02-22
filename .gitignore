@@ -8,7 +8,6 @@
 
 /vendor/
 
-# Логи
 *.log
 
 .DS_Store
