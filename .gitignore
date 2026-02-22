@@ -1,0 +1,21 @@
+/processor
+/simulator
+/dashboard
+/bin/
+
+.env
+*.env.local
+
+/vendor/
+
+# Логи
+*.log
+
+.DS_Store
+Thumbs.db
+
+.idea/
+.vscode/
+*.swp
+
+/pgdata/
