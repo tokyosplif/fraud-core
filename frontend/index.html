@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <title>FRAUD CORE AI | Real-Time Monitoring</title>
+    <style>
+        @keyframes pulse-soft {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .animate-pulse-soft {
+            animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+    </style>
+</head>
+<body class="bg-black text-white p-6 font-sans min-h-screen selection:bg-pink-500/30">
+<div class="max-w-2xl mx-auto">
+    <header class="flex justify-between items-end mb-10 border-b border-zinc-800 pb-6">
+        <div>
+            <h1 class="text-3xl font-black uppercase text-pink-500 italic tracking-tighter">Fraud Core AI</h1>
+            <div class="flex items-center space-x-2 mt-1">
+                <span id="status-dot" class="h-1.5 w-1.5 rounded-full bg-red-500"></span>
+                <span id="status-text" class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Disconnected</span>
+            </div>
+        </div>
+        <div class="text-right">
+            <div id="blocked-count" class="text-2xl font-black text-pink-500 transition-transform duration-200">0</div>
+            <div class="text-[9px] font-bold text-zinc-500 uppercase tracking-wider">Threats Blocked</div>
+        </div>
+    </header>
+
+    <div id="logs" class="space-y-4">
+        <div id="placeholder" class="text-center text-zinc-800 py-20 italic animate-pulse-soft">
+            Waiting for live Kafka stream...
+        </div>
+    </div>
+</div>
+
+<script>
+    const logs = document.getElementById('logs');
+    const placeholder = document.getElementById('placeholder');
+    const blockedCounter = document.getElementById('blocked-count');
+    const statusDot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+
+    let blockedTotal = 0;
+
+    function connect() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+        ws.onopen = () => {
+            statusDot.className = 'h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse';
+            statusText.innerText = "Neural Engine Active";
+            statusText.classList.remove('text-zinc-500');
+            statusText.classList.add('text-green-500/80');
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const tx = JSON.parse(event.data);
+
+                if (placeholder) placeholder.remove();
+
+                const amount = tx.amount || tx.Amount || 0;
+                const location = tx.location || tx.Location || "Global Network";
+                const merchant = tx.merchant || tx.Merchant || "Unknown Merchant";
+                const reason = tx.ai_reason || tx.AiReason || tx.reason || "Real-time pattern analysis complete.";
+                const isBlocked = tx.is_blocked || tx.IsBlocked;
+
+                if (isBlocked) {
+                    blockedTotal++;
+                    blockedCounter.innerText = blockedTotal;
+                    blockedCounter.classList.add('scale-125', 'text-white');
+                    setTimeout(() => blockedCounter.classList.remove('scale-125', 'text-white'), 200);
+                }
+
+                const card = document.createElement('div');
+                card.className = `p-5 rounded-2xl border transition-all duration-700 transform translate-y-4 opacity-0 ${
+                    isBlocked
+                        ? 'border-pink-500/40 bg-pink-500/5 shadow-[0_0_30px_rgba(236,72,153,0.05)]'
+                        : 'border-zinc-800 bg-zinc-900/30 hover:border-zinc-700'
+                }`;
+
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-3">
+                        <div>
+                            <div class="text-lg font-black uppercase tracking-tight ${isBlocked ? 'text-pink-500' : 'text-white'}">
+                                ${merchant}
+                            </div>
+                            <div class="text-[10px] text-zinc-500 uppercase font-bold tracking-[0.2em]">
+                                ${location}
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-xl font-black leading-none ${isBlocked ? 'text-pink-500' : 'text-white'}">
+                                ${amount.toLocaleString()}
+                                <span class="text-[10px] font-normal opacity-40 ml-1">USD</span>
+                            </div>
+                            ${isBlocked ? '<span class="inline-block text-[8px] bg-pink-500 text-black px-2 py-0.5 rounded-full font-black uppercase mt-2">Blocked by AI</span>' : ''}
+                        </div>
+                    </div>
+
+                    <div class="mt-4 pt-3 border-t border-zinc-800/50">
+                        <p class="text-[11px] leading-relaxed text-zinc-400 italic">
+                            <span class="text-zinc-600 not-italic font-bold mr-1 uppercase text-[9px]">AI Verdict:</span>
+                            "${reason}"
+                        </p>
+                    </div>
+                `;
+
+                logs.prepend(card);
+
+                requestAnimationFrame(() => {
+                    card.classList.remove('translate-y-4', 'opacity-0');
+                });
+
+                if (logs.children.length > 10) {
+                    const last = logs.lastElementChild;
+                    last.classList.add('opacity-0', 'scale-95');
+                    setTimeout(() => last.remove(), 500);
+                }
+            } catch (err) {
+                console.error("Payload Error:", err);
+            }
+        };
+
+        ws.onclose = () => {
+            statusDot.className = 'h-1.5 w-1.5 rounded-full bg-red-500';
+            statusText.innerText = "Connection Lost. Retrying...";
+            statusText.classList.replace('text-green-500/80', 'text-zinc-500');
+            setTimeout(connect, 3000);
+        };
+
+        ws.onerror = (err) => {
+            console.error("WS Error:", err);
+            ws.close();
+        };
+    }
+
+    connect();
+</script>
+</body>
+</html>
