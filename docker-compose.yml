@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - fraud-net
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    networks:
+      - fraud-net
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: fraud_radar
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - fraud-net
+
+  ai-risk-engine:
+    build:
+      context: ../ai-risk-engine
+    container_name: ai-risk-engine
+    restart: always
+    env_file: ../ai-risk-engine/.env
+    networks:
+      - fraud-net
+
+  processor:
+    build:
+      context: .
+      target: processor
+    container_name: processor
+    restart: always
+    env_file: .env
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+    networks:
+      - fraud-net
+
+  simulator:
+    build:
+      context: .
+      target: simulator
+    container_name: simulator
+    restart: always
+    env_file: .env
+    depends_on:
+      - kafka
+    networks:
+      - fraud-net
+
+  dashboard:
+    build:
+      context: .
+      target: dashboard
+    container_name: dashboard
+    restart: always
+    env_file: .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      - kafka
+    networks:
+      - fraud-net
+
+volumes:
+  pgdata:
+
+networks:
+  fraud-net:
+    driver: bridge
