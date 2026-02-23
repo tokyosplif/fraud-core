@@ -30,7 +30,7 @@ func RunDashboard(ctx context.Context) error {
 
 	hub := transport.NewHub()
 	consumer := kafka.NewConsumer[domain.FraudAlert](cfg.KafkaBrokers, cfg.AlertsTopic, cfg.DashboardGroupID)
-	defer closer.SafeClose(consumer, "kafka.consumer")
+	defer closer.Close(consumer, "kafka.consumer")
 
 	mux := http.NewServeMux()
 	transport.RegisterRoutes(mux, hub)
