@@ -8,6 +8,11 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+const (
+	minBytes = 10e3 // 10KB
+	maxBytes = 10e6 // 10MB
+)
+
 type Consumer[T any] struct {
 	reader *kafka.Reader
 }
@@ -18,8 +23,8 @@ func NewConsumer[T any](brokers []string, topic, groupID string) *Consumer[T] {
 			Brokers:  brokers,
 			Topic:    topic,
 			GroupID:  groupID,
-			MinBytes: 10e3, // 10KB
-			MaxBytes: 10e6, // 10MB
+			MinBytes: minBytes,
+			MaxBytes: maxBytes,
 		}),
 	}
 }
