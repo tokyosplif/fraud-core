@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   kafka:
     image: apache/kafka:3.7.0
@@ -8,32 +6,52 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${KAFKA_BROKERS:-kafka:9092}
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
     networks:
       - fraud-net
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-cluster.sh", "cluster-id", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7.2-alpine
     container_name: redis
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+    volumes:
+      - redis_data:/data
     networks:
       - fraud-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   postgres:
     image: postgres:15-alpine
     container_name: postgres
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: fraud_radar
+      POSTGRES_USER: ${DB_USER:-user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_DB: ${DB_NAME:-fraud_radar}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
       - fraud-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-user} -d ${DB_NAME:-fraud_radar}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   ai-risk-engine:
     build:
@@ -41,32 +59,47 @@ services:
     container_name: ai-risk-engine
     restart: always
     env_file: ../ai-risk-engine/.env
+    ports:
+      - "${RISK_ENGINE_PORT_EXTERNAL:-50051}:50051"
+    volumes:
+      - ../ai-risk-engine/prompts.json:/app/prompts.json
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - fraud-net
 
   processor:
     build:
       context: .
+      dockerfile: Dockerfile
       target: processor
     container_name: processor
     restart: always
     env_file: .env
     depends_on:
-      - kafka
-      - postgres
-      - redis
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      ai-risk-engine:
+        condition: service_started
     networks:
       - fraud-net
 
   simulator:
     build:
       context: .
+      dockerfile: Dockerfile
       target: simulator
     container_name: simulator
     restart: always
     env_file: .env
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     networks:
       - fraud-net
 
@@ -78,14 +111,18 @@ services:
     restart: always
     env_file: .env
     ports:
-      - "8080:8080"
+      - "${DASHBOARD_PORT_EXTERNAL:-8080}:8080"
+    volumes:
+      - ./frontend:/app/frontend
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     networks:
       - fraud-net
 
 volumes:
   pgdata:
+  redis_data:
 
 networks:
   fraud-net:

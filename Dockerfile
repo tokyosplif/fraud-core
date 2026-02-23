@@ -13,10 +13,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/processor ./cmd/p
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/simulator ./cmd/simulator/main.go
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/dashboard ./cmd/dashboard/main.go
 
-FROM alpine:3.19 AS final
+FROM alpine:3.21 AS final
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
-
 RUN adduser -D appuser
 USER appuser
 
