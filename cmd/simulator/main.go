@@ -2,11 +2,10 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
-
-	"log/slog"
 
 	"github.com/tokyosplif/fraud-core/internal/app"
 	"github.com/tokyosplif/fraud-core/pkg/logger"
@@ -19,7 +18,9 @@ func main() {
 	defer stop()
 
 	if err := app.RunSimulator(ctx); err != nil {
-		slog.Error("Simulator stopped with error", "err", err)
+		slog.Error("Simulator fatal error", "err", err)
 		os.Exit(1)
 	}
+
+	slog.Info("Simulator stopped gracefully")
 }
