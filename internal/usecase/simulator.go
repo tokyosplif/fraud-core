@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 )
 
 type SimulatorPublisher interface {
-	Send(ctx context.Context, tx domain.Transaction) error
+	Publish(ctx context.Context, tx domain.Transaction) error
 }
 
 type Simulator struct {
@@ -22,18 +23,16 @@ func NewSimulator(s SimulatorPublisher) *Simulator {
 }
 
 func (s *Simulator) Run(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-time.After(time.Duration(rand.Intn(4)+2) * time.Second):
 			tx := s.generateTransaction()
 
-			if err := s.publisher.Send(ctx, tx); err != nil {
-				return
+			if err := s.publisher.Publish(ctx, tx); err != nil {
+				slog.Error("simulator failed to send tx", "err", err, "tx_id", tx.ID)
+				continue
 			}
 		}
 	}
@@ -48,7 +47,7 @@ func (s *Simulator) generateTransaction() domain.Transaction {
 
 	switch userID {
 	case "user-1":
-		amount = float64(rand.Intn(40000) + 5000)
+		amount = float64(rand.Intn(35000) + 5000)
 		merchant = "Premium Apple Reseller"
 		location = "Kyiv, Ukraine"
 	case "user-2":
