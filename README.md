@@ -1,36 +1,41 @@
-# Fraud Core AI
+# 🛡️ Fraud Core AI
 
 Fraud Core AI is a high-performance, real-time transaction monitoring and analysis system designed to detect fraudulent financial activities. The project implements a full lifecycle of financial event processing: from anomaly detection to live threat visualization.
 
 ## 🚀 Tech Stack
-- **Language:** Go 1.25
-- **Message Broker:** Apache Kafka (Event-driven architecture)
-- **Caching & Statistics:** Redis (Velocity checks, fast limits)
-- **Storage:** PostgreSQL (Data persistence and event logging)
-- **Communication:** gRPC (Inter-service communication with AI Risk Engine)
-- **Real-time UI:** WebSockets (Live streaming to the dashboard)
+* **Language:** Go 1.25
+* **Message Broker:** Apache Kafka (Event-driven architecture, Pub/Sub)
+* **Caching & Rate Limiting:** Redis (Velocity checks, TTL-based limits)
+* **Storage:** PostgreSQL (Data persistence, connection pooling)
+* **Communication:** gRPC (Low-latency inter-service communication)
+* **Real-time UI:** WebSockets (Live streaming to the frontend)
 
 ## 🏗️ Architecture & Components
 The system is built on modular principles and consists of three key components:
 
-1. **Simulator**  
-   Streams transactions into Kafka, mimicking real-world user behavior. It generates both legitimate operations and suspicious patterns, such as anomalous amounts in foreign jurisdictions or crypto-exchange transactions.
+### 1. Simulator (Data Generator)
+Streams transactions into Kafka, mimicking real-world user behavior. It generates both legitimate operations and suspicious patterns, such as anomalous amounts in foreign jurisdictions or sudden high-frequency crypto-exchange transactions.
 
-2. **Processor**  
-   The central decision-making engine that:
-   - **Infrastructure Sync:** Automatically verifies and initializes required Kafka topics (raw-transactions, fraud-alerts) on startup.
-   - **Velocity Checks:** Performs limit checks via Redis within every 60-second rolling window.
-   - **Hybrid Analysis:** Orchestrates gRPC requests to the AI Risk Engine, combining AI verdicts with local heuristic rules.
-   - **Cold Start Logic:** Implements adaptive blocking for new users, preventing false positives when historical data is unavailable.
-   - **Fail-safe Mechanism:** Automatically switches to "Monitoring Only" mode if the AI service is unavailable.
+### 2. Processor (The Core Engine)
+The central decision-making engine built with **Enterprise-Grade** resilience:
+* **Clean Architecture:** Strict separation of concerns. The `Usecase` layer dictates business rules, entirely decoupled from `Infrastructure` (DB/Kafka) via interfaces.
+* **Highload Ready:** Implements robust PostgreSQL Connection Pooling (`MaxOpenConns`, `MaxIdleConns`) and Kafka batch reading to survive traffic spikes.
+* **Velocity Checks:** Performs high-speed rate limiting via Redis (`INCR` + `EXPIRE`).
+* **Hybrid Analysis:** Orchestrates gRPC requests to the AI Risk Engine, combining LLM verdicts with local heuristic rules.
+* **Fail-safe Mechanism:** Automatically switches to "Fail-Safe / Velocity Only" mode if the AI service becomes unavailable, ensuring zero downtime.
+* **Graceful Resource Management:** A custom `closer` package ensures safe teardown of DB, Redis, and Kafka connections to prevent memory leaks during shutdowns.
 
-3. **Dashboard**  
-   Implemented as an event aggregator that:
-   - **WebSocket Hub:** Manages a pool of active connections and broadcasts alerts in real-time.
-   - **Event Streaming:** Consumes analysis results from Kafka and broadcasts them to the frontend via WebSockets without requiring a page refresh.
+### 3. Dashboard (Real-time UI)
+Implemented as an event aggregator:
+* **WebSocket Hub:** Manages a pool of active connections using `sync.Mutex` to prevent race conditions.
+* **Event Streaming:** Consumes AI verdicts from Kafka and broadcasts them to the frontend via WebSockets, rendering neon-styled threat alerts without page refreshes.
 
-## 🛠️ Detection Logic
+## 🛠️ Detection Logic & Heuristics
 The system utilizes a multi-layered risk filter:
-- **Heuristic Blocking:** Blocks transactions that significantly exceed a user's historical maximum (for amounts > 500 USD).
-- **AI Verdicts:** Evaluates geographical mismatches (e.g., transactions from Nigeria or Singapore for local users) and merchant risks (P2P/Crypto).
-- **Confidence Scoring:** If the AI is uncertain (Confidence Score < 75%), the transaction is not blocked but is instead flagged as [PENDING REVIEW].
+1. **Velocity Blocking:** Blocks users executing an abnormal number of transactions within a short timeframe, overriding AI if necessary.
+2. **Heuristic Blocking:** Blocks transactions that significantly exceed a user's historical maximum (e.g., > 2x MaxTx for amounts > $500).
+3. **AI Verdicts:** Evaluates geographical mismatches (e.g., transactions from Nigeria for local Ukrainian users) and merchant risks (P2P/Crypto).
+4. **Confidence Scoring:** If the AI is uncertain (Confidence Score < 75%) but the amount is massive (>$10,000), the transaction is not blocked but flagged as `[PENDING REVIEW]` for manual anti-fraud officer inspection.
+
+
+---
