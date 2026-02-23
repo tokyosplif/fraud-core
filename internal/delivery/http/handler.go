@@ -1,104 +1,44 @@
 package http
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/segmentio/kafka-go"
+	"github.com/tokyosplif/fraud-core/internal/domain"
+	"github.com/tokyosplif/fraud-core/pkg/closer"
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
 type Hub struct {
-	clients    map[*websocket.Conn]bool
-	broadcast  chan []byte
-	register   chan *websocket.Conn
-	unregister chan *websocket.Conn
-	mu         sync.Mutex
+	clients map[*websocket.Conn]bool
+	mu      sync.Mutex
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		clients:    make(map[*websocket.Conn]bool),
-		broadcast:  make(chan []byte),
-		register:   make(chan *websocket.Conn),
-		unregister: make(chan *websocket.Conn),
+		clients: make(map[*websocket.Conn]bool),
 	}
 }
 
-func (h *Hub) Run(ctx context.Context, reader *kafka.Reader) {
-	go func() {
-		for {
-			m, err := reader.ReadMessage(ctx)
-			if err != nil {
-				if ctx.Err() != nil {
-					slog.Info("Kafka reader context cancelled")
-					return
-				}
-				slog.Error("Kafka dashboard reader error", "err", err)
-				select {
-				case <-time.After(1 * time.Second):
-					continue
-				case <-ctx.Done():
-					return
-				}
-			}
-			h.broadcast <- m.Value
-		}
-	}()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case client := <-h.register:
-			if client == nil {
-				continue
-			}
-			h.mu.Lock()
-			h.clients[client] = true
-			h.mu.Unlock()
-		case client := <-h.unregister:
-			h.mu.Lock()
-			if client == nil {
-				h.mu.Unlock()
-				continue
-			}
-			if _, ok := h.clients[client]; ok {
-				if err := client.Close(); err != nil {
-					slog.Error("WS close error", "err", err)
-				}
-				delete(h.clients, client)
-			}
-			h.mu.Unlock()
-		case message := <-h.broadcast:
-			h.mu.Lock()
-			for client := range h.clients {
-				err := client.WriteMessage(websocket.TextMessage, message)
-				if err != nil {
-					slog.Error("WS write error", "err", err)
-					if cerr := client.Close(); cerr != nil {
-						slog.Error("WS close error", "err", cerr)
-					}
-					delete(h.clients, client)
-				}
-			}
-			h.mu.Unlock()
+func (h *Hub) BroadcastAlert(alert domain.FraudAlert) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for client := range h.clients {
+		if err := client.WriteJSON(alert); err != nil {
+			slog.Warn("WS write error, closing client", "err", err)
+			closer.SafeClose(client, "ws.client")
+			delete(h.clients, client)
 		}
 	}
 }
 
-func RegisterRoutes(mux *http.ServeMux, reader *kafka.Reader) {
-	hub := NewHub()
-	go hub.Run(context.Background(), reader)
+func RegisterRoutes(mux *http.ServeMux, hub *Hub) {
+	mux.Handle("/", http.FileServer(http.Dir("./frontend")))
 
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -107,11 +47,25 @@ func RegisterRoutes(mux *http.ServeMux, reader *kafka.Reader) {
 			return
 		}
 
-		hub.register <- conn
+		hub.mu.Lock()
+		hub.clients[conn] = true
+		hub.mu.Unlock()
+		slog.Info("New dashboard client connected", "addr", r.RemoteAddr)
 
-		<-r.Context().Done()
-		hub.unregister <- conn
+		go func() {
+			defer func() {
+				hub.mu.Lock()
+				delete(hub.clients, conn)
+				hub.mu.Unlock()
+				closer.SafeClose(conn, "ws.client")
+				slog.Info("Browser disconnected")
+			}()
+
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					break
+				}
+			}
+		}()
 	})
-
-	mux.Handle("/", http.FileServer(http.Dir("./frontend")))
 }
