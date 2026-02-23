@@ -8,9 +8,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/segmentio/kafka-go"
 	"github.com/tokyosplif/fraud-core/internal/config"
 	transport "github.com/tokyosplif/fraud-core/internal/delivery/http"
+	"github.com/tokyosplif/fraud-core/internal/domain"
+	"github.com/tokyosplif/fraud-core/internal/infrastructure/kafka"
 	"github.com/tokyosplif/fraud-core/pkg/closer"
 )
 
@@ -20,25 +21,39 @@ func RunDashboard(ctx context.Context) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers: cfg.KafkaBrokers,
-		Topic:   cfg.AlertsTopic,
-		GroupID: cfg.DashboardGroupID,
-	})
-	defer closer.SafeClose(reader, "kafka.reader")
+	if len(cfg.KafkaBrokers) == 0 {
+		return fmt.Errorf("no kafka brokers configured")
+	}
+	if err := kafka.EnsureTopics(cfg.KafkaBrokers[0], cfg.KafkaTopic, cfg.AlertsTopic); err != nil {
+		return fmt.Errorf("failed to ensure kafka topics: %w", err)
+	}
+
+	hub := transport.NewHub()
+	consumer := kafka.NewConsumer[domain.FraudAlert](cfg.KafkaBrokers, cfg.AlertsTopic, cfg.DashboardGroupID)
+	defer closer.SafeClose(consumer, "kafka.consumer")
 
 	mux := http.NewServeMux()
-
-	transport.RegisterRoutes(mux, reader)
+	transport.RegisterRoutes(mux, hub)
 
 	server := &http.Server{
 		Addr:    cfg.DashboardPort,
 		Handler: mux,
 	}
 
+	go func() {
+		slog.Info("Kafka Consumer for Dashboard started", "topic", cfg.AlertsTopic)
+		err := consumer.Consume(ctx, func(ctx context.Context, alert domain.FraudAlert) error {
+			hub.BroadcastAlert(alert)
+			return nil
+		})
+		if err != nil {
+			slog.Error("Kafka consumer fatal error", "err", err)
+		}
+	}()
+
 	errChan := make(chan error, 1)
 	go func() {
-		slog.Info("Dashboard server starting", "addr", cfg.DashboardPort)
+		slog.Info("Dashboard UI available at", "port", cfg.DashboardPort)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errChan <- err
 		}

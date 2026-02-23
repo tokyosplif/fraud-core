@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/tokyosplif/fraud-core/internal/config"
+	"github.com/tokyosplif/fraud-core/internal/domain"
 	"github.com/tokyosplif/fraud-core/internal/infrastructure/kafka"
 	"github.com/tokyosplif/fraud-core/internal/usecase"
 	"github.com/tokyosplif/fraud-core/pkg/closer"
@@ -16,14 +17,15 @@ func RunSimulator(ctx context.Context) error {
 		return err
 	}
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(10 * time.Second)
 
-	kafkaProducer := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic)
+	kafkaProducer := kafka.NewPublisher[domain.Transaction](cfg.KafkaBrokers, cfg.KafkaTopic)
 	defer closer.SafeClose(kafkaProducer, "kafka.producer")
 
 	simulator := usecase.NewSimulator(kafkaProducer)
 
-	simulator.Run(ctx)
+	go simulator.Run(ctx)
 
+	<-ctx.Done()
 	return nil
 }
