@@ -20,7 +20,7 @@ func RunSimulator(ctx context.Context) error {
 	time.Sleep(10 * time.Second)
 
 	kafkaProducer := kafka.NewPublisher[domain.Transaction](cfg.KafkaBrokers, cfg.KafkaTopic)
-	defer closer.SafeClose(kafkaProducer, "kafka.producer")
+	defer closer.Close(kafkaProducer, "kafka.producer")
 
 	simulator := usecase.NewSimulator(kafkaProducer)
 
