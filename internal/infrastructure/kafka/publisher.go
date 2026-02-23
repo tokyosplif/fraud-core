@@ -3,18 +3,17 @@ package kafka
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"fmt"
 
 	"github.com/segmentio/kafka-go"
-	"github.com/tokyosplif/fraud-core/internal/domain"
 )
 
-type Publisher struct {
+type Publisher[T any] struct {
 	writer *kafka.Writer
 }
 
-func NewPublisher(brokers []string, topic string) *Publisher {
-	return &Publisher{
+func NewPublisher[T any](brokers []string, topic string) *Publisher[T] {
+	return &Publisher[T]{
 		writer: &kafka.Writer{
 			Addr:     kafka.TCP(brokers...),
 			Topic:    topic,
@@ -23,25 +22,17 @@ func NewPublisher(brokers []string, topic string) *Publisher {
 	}
 }
 
-func (p *Publisher) Publish(ctx context.Context, alert domain.FraudAlert) error {
-	bytes, err := json.Marshal(alert)
+func (p *Publisher[T]) Publish(ctx context.Context, data T) error {
+	payload, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("failed to marshal fraud alert: %v", err)
-		return err
+		return fmt.Errorf("marshal error: %w", err)
 	}
 
-	err = p.writer.WriteMessages(ctx, kafka.Message{
-		Key:   []byte(alert.TransactionID),
-		Value: bytes,
+	return p.writer.WriteMessages(ctx, kafka.Message{
+		Value: payload,
 	})
-	if err != nil {
-		log.Printf("failed to publish alert to kafka: %v", err)
-		return err
-	}
-
-	return nil
 }
 
-func (p *Publisher) Close() error {
+func (p *Publisher[T]) Close() error {
 	return p.writer.Close()
 }

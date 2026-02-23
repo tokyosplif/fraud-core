@@ -6,16 +6,14 @@ import (
 	"log/slog"
 
 	"github.com/segmentio/kafka-go"
-	"github.com/tokyosplif/fraud-core/internal/domain"
-	_ "github.com/tokyosplif/fraud-core/pkg/closer"
 )
 
-type Consumer struct {
+type Consumer[T any] struct {
 	reader *kafka.Reader
 }
 
-func NewConsumer(brokers []string, topic, groupID string) *Consumer {
-	return &Consumer{
+func NewConsumer[T any](brokers []string, topic, groupID string) *Consumer[T] {
+	return &Consumer[T]{
 		reader: kafka.NewReader(kafka.ReaderConfig{
 			Brokers:  brokers,
 			Topic:    topic,
@@ -26,22 +24,31 @@ func NewConsumer(brokers []string, topic, groupID string) *Consumer {
 	}
 }
 
-func (c *Consumer) Consume(ctx context.Context, handler func(context.Context, domain.Transaction) error) error {
+func (c *Consumer[T]) Consume(ctx context.Context, handler func(context.Context, T) error) error {
 	for {
 		m, err := c.reader.ReadMessage(ctx)
 		if err != nil {
-			slog.Error("Kafka read error", "err", err)
-			return err
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+				slog.Error("Kafka read error", "err", err)
+				return err
+			}
 		}
 
-		var tx domain.Transaction
-		if err := json.Unmarshal(m.Value, &tx); err != nil {
-			slog.Error("JSON parse error", "err", err)
+		var data T
+		if err := json.Unmarshal(m.Value, &data); err != nil {
+			slog.Error("JSON parse error", "err", err, "topic", m.Topic)
 			continue
 		}
 
-		if err := handler(ctx, tx); err != nil {
-			slog.Error("Handler process failed", "tx_id", tx.ID, "err", err)
+		if err := handler(ctx, data); err != nil {
+			slog.Error("Handler process failed", "err", err)
 		}
 	}
+}
+
+func (c *Consumer[T]) Close() error {
+	return c.reader.Close()
 }
