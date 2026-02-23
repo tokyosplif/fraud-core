@@ -2,25 +2,28 @@ package grpc_client
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/avast/retry-go"
-	"github.com/redis/go-redis/v9"
 	"github.com/tokyosplif/fraud-core/internal/domain"
 	"github.com/tokyosplif/fraud-core/pkg/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+const (
+	requestTimeout = 10 * time.Second
+	retryAttempts  = 3
+	retryDelay     = 200 * time.Millisecond
+)
+
 type RiskClient struct {
 	client pb.RiskEngineServiceClient
 	conn   *grpc.ClientConn
-	redis  *redis.Client
 }
 
-func NewRiskClient(addr string, rdb *redis.Client) (*RiskClient, error) {
+func NewRiskClient(addr string) (*RiskClient, error) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
@@ -28,43 +31,11 @@ func NewRiskClient(addr string, rdb *redis.Client) (*RiskClient, error) {
 	return &RiskClient{
 		client: pb.NewRiskEngineServiceClient(conn),
 		conn:   conn,
-		redis:  rdb,
 	}, nil
 }
 
 func (c *RiskClient) Analyze(ctx context.Context, tx domain.Transaction, user domain.User) (domain.FraudAlert, error) {
-	cacheKey := fmt.Sprintf("ai_risk:%s:%s", tx.UserID, tx.Merchant)
-
-	if val, err := c.redis.Get(ctx, cacheKey).Result(); err == nil {
-		var cachedAlert domain.FraudAlert
-		if err := json.Unmarshal([]byte(val), &cachedAlert); err == nil {
-			return cachedAlert, nil
-		}
-	}
-
-	resp, err := c.fetchRemoteAnalysis(ctx, tx, user)
-	if err != nil {
-		return domain.FraudAlert{}, err
-	}
-
-	alert := domain.FraudAlert{
-		TransactionID: tx.ID,
-		Reason:        resp.GetReason(),
-		AIPushMessage: resp.GetAiPushMsg(),
-		IsBlocked:     resp.GetIsBlocked(),
-		Amount:        tx.Amount,
-		Location:      tx.Location,
-		Merchant:      tx.Merchant,
-	}
-
-	if data, err := json.Marshal(alert); err == nil {
-		c.redis.Set(ctx, cacheKey, data, time.Minute*5)
-	}
-	return alert, nil
-}
-
-func (c *RiskClient) fetchRemoteAnalysis(ctx context.Context, tx domain.Transaction, user domain.User) (*pb.AnalyzeResponse, error) {
-	gCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	gCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
 	userContext := fmt.Sprintf(
@@ -88,14 +59,23 @@ func (c *RiskClient) fetchRemoteAnalysis(ctx context.Context, tx domain.Transact
 			resp, err = c.client.AnalyzeTransaction(gCtx, req)
 			return err
 		},
-		retry.Attempts(3),
-		retry.Delay(200*time.Millisecond),
+		retry.Attempts(retryAttempts),
+		retry.Delay(retryDelay),
 	)
 
 	if err != nil {
-		return nil, fmt.Errorf("remote ai-risk-engine failure: %w", err)
+		return domain.FraudAlert{}, fmt.Errorf("remote ai-risk-engine failure: %w", err)
 	}
-	return resp, nil
+
+	return domain.FraudAlert{
+		TransactionID: tx.ID,
+		Reason:        resp.GetReason(),
+		AIPushMessage: resp.GetAiPushMsg(),
+		IsBlocked:     resp.GetIsBlocked(),
+		Amount:        tx.Amount,
+		Location:      tx.Location,
+		Merchant:      tx.Merchant,
+	}, nil
 }
 
 func (c *RiskClient) Close() error {
