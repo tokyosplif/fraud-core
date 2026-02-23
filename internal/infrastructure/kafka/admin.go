@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"time"
 
@@ -9,21 +10,27 @@ import (
 	"github.com/tokyosplif/fraud-core/pkg/closer"
 )
 
+const (
+	kafkaMaxRetries = 10
+	kafkaRetryDelay = 3 * time.Second
+)
+
 func EnsureTopics(address string, topics ...string) error {
 	var conn *kafka.Conn
 	var err error
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < kafkaMaxRetries; i++ {
 		conn, err = kafka.Dial("tcp", address)
 		if err == nil {
 			break
 		}
-		time.Sleep(3 * time.Second)
+		slog.Warn("Waiting for Kafka to be ready...", "attempt", i+1, "max", kafkaMaxRetries)
+		time.Sleep(kafkaRetryDelay)
 	}
 	if err != nil {
-		return fmt.Errorf("failed to dial kafka: %w", err)
+		return fmt.Errorf("failed to dial kafka after %d attempts: %w", kafkaMaxRetries, err)
 	}
-	defer closer.SafeClose(conn, "kafka.admin.conn")
+	defer closer.Close(conn, "kafka.admin.conn")
 
 	controller, err := conn.Controller()
 	if err != nil {
@@ -33,7 +40,7 @@ func EnsureTopics(address string, topics ...string) error {
 	if err != nil {
 		return err
 	}
-	defer closer.SafeClose(ctrl, "kafka.admin.ctrl")
+	defer closer.Close(ctrl, "kafka.admin.ctrl")
 
 	existing, err := ctrl.ReadPartitions()
 	if err != nil {
