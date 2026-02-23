@@ -11,19 +11,19 @@ func SeedUsers(db *gorm.DB) error {
 	users := []domain.User{
 		{
 			ID:        "user-1",
-			Email:     "ceo@apple.com",
+			Email:     "premium.client@example.com",
 			RiskScore: 0,
 			IsBanned:  false,
 		},
 		{
 			ID:        "user-2",
-			Email:     "hacker99@darknet.com",
+			Email:     "flagged.account@example.com",
 			RiskScore: 85,
 			IsBanned:  false,
 		},
 		{
 			ID:        "user-3",
-			Email:     "john.doe@gmail.com",
+			Email:     "standard.user@example.com",
 			RiskScore: 15,
 			IsBanned:  false,
 		},
@@ -36,5 +36,6 @@ func SeedUsers(db *gorm.DB) error {
 		}
 	}
 
+	slog.Info("Database seeding completed successfully")
 	return nil
 }
