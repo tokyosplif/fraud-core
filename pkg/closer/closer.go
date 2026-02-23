@@ -11,5 +11,7 @@ func SafeClose(c io.Closer, name string) {
 	}
 	if err := c.Close(); err != nil {
 		slog.Warn("Failed to close resource", "resource", name, "err", err)
+	} else {
+		slog.Debug("Resource closed successfully", "resource", name)
 	}
 }
