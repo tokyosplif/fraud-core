@@ -31,7 +31,7 @@ func (h *Hub) BroadcastAlert(alert domain.FraudAlert) {
 	for client := range h.clients {
 		if err := client.WriteJSON(alert); err != nil {
 			slog.Warn("WS write error, closing client", "err", err)
-			closer.SafeClose(client, "ws.client")
+			closer.Close(client, "ws.client")
 			delete(h.clients, client)
 		}
 	}
@@ -57,7 +57,7 @@ func RegisterRoutes(mux *http.ServeMux, hub *Hub) {
 				hub.mu.Lock()
 				delete(hub.clients, conn)
 				hub.mu.Unlock()
-				closer.SafeClose(conn, "ws.client")
+				closer.Close(conn, "ws.client")
 				slog.Info("Browser disconnected")
 			}()
 
