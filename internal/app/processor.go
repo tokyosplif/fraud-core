@@ -19,6 +19,11 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	dbMaxRetries = 30
+	dbRetryDelay = 1 * time.Second
+)
+
 func RunProcessor(ctx context.Context) error {
 	cfg, err := config.New()
 	if err != nil {
@@ -26,33 +31,48 @@ func RunProcessor(ctx context.Context) error {
 	}
 
 	var pgDB *gorm.DB
-	for i := 0; i < 30; i++ {
+	for i := 0; i < dbMaxRetries; i++ {
 		pgDB, err = gorm.Open(postgres.Open(cfg.PostgresDSN), &gorm.Config{})
 		if err == nil {
 			break
 		}
-		time.Sleep(1 * time.Second)
+		slog.Warn("Waiting for database...", "attempt", i+1, "max", dbMaxRetries)
+		time.Sleep(dbRetryDelay)
 	}
 	if err != nil || pgDB == nil {
-		return fmt.Errorf("postgres failure: %w", err)
+		return fmt.Errorf("postgres failure after %d attempts: %w", dbMaxRetries, err)
 	}
 
 	if err := pgDB.AutoMigrate(&domain.User{}, &domain.FraudEvent{}); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
 
+	if err := db.SeedUsers(pgDB); err != nil {
+		slog.Error("Seeding failed, but continuing execution", "err", err)
+	}
+
+	sqlDB, err := pgDB.DB()
+	if err == nil {
+		sqlDB.SetMaxOpenConns(25)
+		sqlDB.SetMaxIdleConns(5)
+		sqlDB.SetConnMaxLifetime(time.Hour)
+		slog.Info("Postgres connection pool configured", "max_open", 25, "max_idle", 5)
+	}
+
 	pgRepo := db.NewPostgresRepository(pgDB)
+
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     cfg.RedisAddr,
 		Password: cfg.RedisPassword,
 	})
-	defer closer.SafeClose(rdb, "redis")
+	defer closer.Close(rdb, "redis")
+	redisRepo := db.NewRedisRepository(rdb)
 
-	aiClient, err := grpc_client.NewRiskClient(cfg.RiskEngineAddr, rdb)
+	aiClient, err := grpc_client.NewRiskClient(cfg.RiskEngineAddr)
 	if err != nil {
 		return fmt.Errorf("ai client: %w", err)
 	}
-	defer closer.SafeClose(aiClient, "risk.client")
+	defer closer.Close(aiClient, "risk.client")
 
 	if len(cfg.KafkaBrokers) == 0 {
 		return fmt.Errorf("no kafka brokers configured")
@@ -62,47 +82,20 @@ func RunProcessor(ctx context.Context) error {
 	}
 
 	publisher := kafka.NewPublisher[domain.FraudAlert](cfg.KafkaBrokers, cfg.AlertsTopic)
-	defer closer.SafeClose(publisher, "kafka.publisher")
+	defer closer.Close(publisher, "kafka.publisher")
 
-	detector := usecase.NewFraudDetector(aiClient, pgRepo, db.NewRedisRepository(rdb), publisher)
+	detector := usecase.NewFraudDetector(aiClient, pgRepo, redisRepo, publisher)
 
 	consumer := kafka.NewConsumer[domain.Transaction](cfg.KafkaBrokers, cfg.KafkaTopic, cfg.ProcessorGroupID)
-	defer closer.SafeClose(consumer, "kafka.consumer")
+	defer closer.Close(consumer, "kafka.consumer")
 
 	slog.Info("FRAUD CORE ENGINE started", "topic", cfg.KafkaTopic)
 
 	return consumer.Consume(ctx, func(ctx context.Context, tx domain.Transaction) error {
-		user, _ := pgRepo.GetUserByID(ctx, tx.UserID)
-		if user == nil {
-			user = &domain.User{ID: tx.UserID, RiskScore: 15}
-			_ = pgRepo.CreateUser(ctx, user)
-		}
-
-		statsKey := fmt.Sprintf("user_stats:%s", tx.UserID)
-		var stats struct {
-			MaxAmount float64 `gorm:"column:max_amount"`
-			AvgAmount float64 `gorm:"column:avg_amount"`
-		}
-
-		cached, err := rdb.Get(ctx, statsKey).Result()
-		if err != nil || cached == "" {
-			pgDB.Raw(`
-					SELECT COALESCE(MAX(amount),0) as max_amount, COALESCE(AVG(amount),0) as avg_amount 
-					FROM fraud_events WHERE user_id = ?`, tx.UserID).Scan(&stats)
-
-			rdb.Set(ctx, statsKey, fmt.Sprintf("%.2f|%.2f", stats.MaxAmount, stats.AvgAmount), 10*time.Minute)
-		} else {
-			_, _ = fmt.Sscanf(cached, "%f|%f", &stats.MaxAmount, &stats.AvgAmount)
-		}
-
-		user.MaxTx = stats.MaxAmount
-		user.AvgTx = stats.AvgAmount
-
-		if err := detector.Detect(ctx, tx, *user); err != nil {
+		if err := detector.Detect(ctx, tx); err != nil {
 			slog.Error("Failed to detect fraud", "tx_id", tx.ID, "err", err)
 			return err
 		}
-
 		return nil
 	})
 }
