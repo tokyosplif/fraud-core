@@ -20,8 +20,11 @@ import (
 )
 
 const (
-	dbMaxRetries = 30
-	dbRetryDelay = 1 * time.Second
+	dbMaxRetries      = 30
+	dbMaxOpenConns    = 25
+	dbMaxIdleConns    = 5
+	dbConnMaxLifetime = time.Hour
+	dbRetryDelay      = 1 * time.Second
 )
 
 func RunProcessor(ctx context.Context) error {
@@ -52,12 +55,20 @@ func RunProcessor(ctx context.Context) error {
 	}
 
 	sqlDB, err := pgDB.DB()
-	if err == nil {
-		sqlDB.SetMaxOpenConns(25)
-		sqlDB.SetMaxIdleConns(5)
-		sqlDB.SetConnMaxLifetime(time.Hour)
-		slog.Info("Postgres connection pool configured", "max_open", 25, "max_idle", 5)
+	if err != nil {
+		return fmt.Errorf("failed to get sql db to configure pool: %w", err)
 	}
+
+	sqlDB.SetMaxOpenConns(dbMaxOpenConns)
+	sqlDB.SetMaxIdleConns(dbMaxIdleConns)
+	sqlDB.SetConnMaxLifetime(dbConnMaxLifetime)
+
+	defer closer.Close(sqlDB, "postgres")
+
+	slog.Info("Postgres connection pool configured",
+		"max_open", dbMaxOpenConns,
+		"max_idle", dbMaxIdleConns,
+	)
 
 	pgRepo := db.NewPostgresRepository(pgDB)
 
