@@ -1,3 +1,9 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   kafka:
     image: apache/kafka:3.7.0
@@ -6,7 +12,7 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${KAFKA_BROKERS:-kafka:9092}
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
@@ -21,6 +27,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging: *default-logging
 
   redis:
     image: redis:7.2-alpine
@@ -35,23 +42,25 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    logging: *default-logging
 
   postgres:
     image: postgres:15-alpine
     container_name: postgres
     environment:
-      POSTGRES_USER: ${DB_USER:-user}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
-      POSTGRES_DB: ${DB_NAME:-fraud_radar}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
       - fraud-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-user} -d ${DB_NAME:-fraud_radar}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 5
+    logging: *default-logging
 
   ai-risk-engine:
     build:
@@ -60,14 +69,17 @@ services:
     restart: always
     env_file: ../ai-risk-engine/.env
     ports:
-      - "${RISK_ENGINE_PORT_EXTERNAL:-50051}:50051"
-    volumes:
-      - ../ai-risk-engine/prompts.json:/app/prompts.json
+      - "${RISK_ENGINE_PORT_EXTERNAL}:50051"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
     depends_on:
       redis:
         condition: service_healthy
     networks:
       - fraud-net
+    logging: *default-logging
 
   processor:
     build:
@@ -88,6 +100,7 @@ services:
         condition: service_started
     networks:
       - fraud-net
+    logging: *default-logging
 
   simulator:
     build:
@@ -102,6 +115,7 @@ services:
         condition: service_healthy
     networks:
       - fraud-net
+    logging: *default-logging
 
   dashboard:
     build:
@@ -111,14 +125,13 @@ services:
     restart: always
     env_file: .env
     ports:
-      - "${DASHBOARD_PORT_EXTERNAL:-8080}:8080"
-    volumes:
-      - ./frontend:/app/frontend
+      - "${DASHBOARD_PORT_EXTERNAL}:8080"
     depends_on:
       kafka:
         condition: service_healthy
     networks:
       - fraud-net
+    logging: *default-logging
 
 volumes:
   pgdata:
